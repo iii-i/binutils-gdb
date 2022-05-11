@@ -1005,6 +1005,9 @@ insert_section_p (const struct bfd *abfd,
   if ((bfd_section_flags (section) & SEC_THREAD_LOCAL) != 0)
     /* This is a TLS section.  */
     return 0;
+  if (bfd_is_const_section (section))
+    /* This is one of the global *ABS*, *UND*, *IND*, or *COM* sections.  */
+    return 0;
 
   return 1;
 }
