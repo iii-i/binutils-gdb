@@ -59,6 +59,30 @@ obstack_new (struct obstack *ob, Args&&... args)
   return object;
 }
 
+/* Allocate NUMBER objects on OB and call their default constructors.  */
+
+template <typename T>
+static inline T *
+obstack_newvec (obstack *ob, size_t number)
+{
+  T *objects = static_cast<T *> (obstack_alloc (ob, number * sizeof (T)));
+  for (size_t i = 0; i < number; i++)
+    {
+      try
+	{
+	  new (objects + i) T ();
+	}
+      catch (...)
+	{
+	  for (size_t j = 0; j < i; j++)
+	    (objects + j)->~T ();
+	  obstack_free (ob, objects);
+	  throw;
+	};
+    }
+  return objects;
+}
+
 /* Unless explicitly specified, GDB obstacks always use xmalloc() and
    xfree().  */
 /* Note: ezannoni 2004-02-09: One could also specify the allocation
