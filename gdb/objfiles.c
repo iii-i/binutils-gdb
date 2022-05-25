@@ -53,6 +53,7 @@
 #include "gdb_bfd.h"
 #include "btrace.h"
 #include "gdbsupport/pathstuff.h"
+#include "gdbsupport/interval_tree.h"
 
 #include <algorithm>
 #include <vector>
@@ -62,20 +63,56 @@
 
 DEFINE_REGISTRY (objfile, REGISTRY_ACCESS_FIELD)
 
+/* Section map is an interval tree containing sections from all objfiles -
+   including the overlapping ones.  It is updated lazily: the updates are
+   queued in sections_to_add and sections_to_remove intrusive lists, and are
+   applied only when the section map is actually needed.  */
+
+struct section_map_entry
+{
+  explicit section_map_entry (obj_section *section)
+      : section (section), low (section->addr ()),
+	high (section->endaddr () - 1)
+  {
+    gdb_assert (section->section_map_entry == nullptr);
+    section->section_map_entry = this;
+  }
+
+  section_map_entry (const section_map_entry &) = delete;
+  section_map_entry &operator= (const section_map_entry &) = delete;
+  section_map_entry (section_map_entry &&) = delete;
+  section_map_entry &operator= (section_map_entry &&) = delete;
+
+  /* The corresponding section.  */
+  obj_section *section;
+
+  /* For embedding into interval_tree.  */
+  typedef CORE_ADDR endpoint_type;
+  const CORE_ADDR low;
+  const CORE_ADDR high;
+
+  /* Sections that need to be removed from the section map.  */
+  intrusive_list_node<section_map_entry> sections_to_remove;
+};
+
 /* Externally visible variables that are owned by this module.
    See declarations in objfile.h for more info.  */
 
 struct objfile_pspace_info
 {
-  objfile_pspace_info () = default;
-  ~objfile_pspace_info ();
+  interval_tree<section_map_entry> sections;
 
-  struct obj_section **sections = nullptr;
-  int num_sections = 0;
+  /* Sections that need to be added to the section map.  */
+  intrusive_list<obj_section, intrusive_member_node<
+				  obj_section, &obj_section::sections_to_add> >
+      sections_to_add;
 
-  /* Nonzero if object files have been added since the section map
-     was last updated.  */
-  int new_objfiles_available = 0;
+  /* Sections that need to be removed from the section map.  */
+  intrusive_list<
+      section_map_entry,
+      intrusive_member_node<section_map_entry,
+			    &section_map_entry::sections_to_remove> >
+      sections_to_remove;
 
   /* Nonzero if the section map MUST be updated before use.  */
   int section_map_dirty = 0;
@@ -87,11 +124,6 @@ struct objfile_pspace_info
 /* Per-program-space data key.  */
 static const struct program_space_key<objfile_pspace_info>
   objfiles_pspace_data;
-
-objfile_pspace_info::~objfile_pspace_info ()
-{
-  xfree (sections);
-}
 
 /* Get the current svr4 data.  If none is found yet, add it now.  This
    function always returns a valid object.  */
@@ -291,9 +323,8 @@ build_objfile_section_table (struct objfile *objfile)
 {
   int count = gdb_bfd_count_sections (objfile->obfd);
 
-  objfile->sections = OBSTACK_CALLOC (&objfile->objfile_obstack,
-				      count,
-				      struct obj_section);
+  objfile->sections
+      = obstack_newvec<struct obj_section> (&objfile->objfile_obstack, count);
   objfile->sections_end = (objfile->sections + count);
   for (asection *sect : gdb_bfd_sections (objfile->obfd))
     add_to_objfile_sections (objfile->obfd, sect, objfile, 0);
@@ -473,8 +504,11 @@ objfile::make (bfd *bfd_, const char *name_, objfile_flags flags_,
   current_program_space->add_objfile (std::shared_ptr<objfile> (result),
 				      parent);
 
-  /* Rebuild section map next time we need it.  */
-  get_objfile_pspace_data (current_program_space)->new_objfiles_available = 1;
+  /* Update section map next time we need it.  */
+  objfile_pspace_info *pspace_info = get_objfile_pspace_data (result->pspace);
+  obj_section *s;
+  ALL_OBJFILE_OSECTIONS (result, s)
+    pspace_info->sections_to_add.push_back (*s);
 
   return result;
 }
@@ -500,6 +534,35 @@ free_objfile_separate_debug (struct objfile *objfile)
       struct objfile *next_child = child->separate_debug_objfile_link;
       child->unlink ();
       child = next_child;
+    }
+}
+
+/* Schedule removal of all OBJFILE's sections, and call their destructors.  */
+
+static void
+objfile_destroy_sections (objfile *objfile)
+{
+  objfile_pspace_info *info = objfiles_pspace_data.get (objfile->pspace);
+  obj_section *s;
+
+  ALL_OBJFILE_OSECTIONS (objfile, s)
+    {
+      if (info != nullptr)
+	{
+	  if (s->sections_to_add.is_linked ())
+	    info->sections_to_add.erase (
+		decltype (info->sections_to_add)::iterator (s));
+
+	  if (s->section_map_entry != nullptr)
+	    {
+	      gdb_assert (s->section_map_entry->section == s);
+	      s->section_map_entry->section = nullptr;
+	      if (!s->section_map_entry->sections_to_remove.is_linked ())
+		info->sections_to_remove.push_back (*s->section_map_entry);
+	    }
+	}
+
+      s->~obj_section ();
     }
 }
 
@@ -595,11 +658,10 @@ objfile::~objfile ()
       clear_current_source_symtab_and_line ();
   }
 
+  objfile_destroy_sections (this);
+
   /* Free the obstacks for non-reusable objfiles.  */
   obstack_free (&objfile_obstack, 0);
-
-  /* Rebuild section map next time we need it.  */
-  get_objfile_pspace_data (pspace)->section_map_dirty = 1;
 }
 
 
@@ -713,15 +775,20 @@ objfile_relocate1 (struct objfile *objfile,
       objfile->section_offsets[i] = new_offsets[i];
   }
 
-  /* Rebuild section map next time we need it.  */
-  get_objfile_pspace_data (objfile->pspace)->section_map_dirty = 1;
-
-  /* Update the table in exec_ops, used to read memory.  */
-  struct obj_section *s;
+  /* Update section map next time we need it.
+     Update the table in exec_ops, used to read memory.  */
+  objfile_pspace_info *pspace_info
+      = get_objfile_pspace_data (current_program_space);
+  obj_section *s;
   ALL_OBJFILE_OSECTIONS (objfile, s)
     {
       int idx = s - objfile->sections;
 
+      if (s->section_map_entry != nullptr
+	  && !s->section_map_entry->sections_to_remove.is_linked ())
+	pspace_info->sections_to_remove.push_back (*s->section_map_entry);
+      if (!s->sections_to_add.is_linked ())
+	pspace_info->sections_to_add.push_back (*s);
       exec_set_section_address (bfd_get_filename (objfile->obfd), idx,
 				s->addr ());
     }
@@ -1012,180 +1079,51 @@ insert_section_p (const struct bfd *abfd,
   return 1;
 }
 
-/* Filter out overlapping sections where one section came from the real
-   objfile, and the other from a separate debuginfo file.
-   Return the size of table after redundant sections have been eliminated.  */
-
-static int
-filter_debuginfo_sections (struct obj_section **map, int map_size)
-{
-  int i, j;
-
-  for (i = 0, j = 0; i < map_size - 1; i++)
-    {
-      struct obj_section *const sect1 = map[i];
-      struct obj_section *const sect2 = map[i + 1];
-      const struct objfile *const objfile1 = sect1->objfile;
-      const struct objfile *const objfile2 = sect2->objfile;
-      const CORE_ADDR sect1_addr = sect1->addr ();
-      const CORE_ADDR sect2_addr = sect2->addr ();
-
-      if (sect1_addr == sect2_addr
-	  && (objfile1->separate_debug_objfile == objfile2
-	      || objfile2->separate_debug_objfile == objfile1))
-	{
-	  map[j++] = preferred_obj_section (sect1, sect2);
-	  ++i;
-	}
-      else
-	map[j++] = sect1;
-    }
-
-  if (i < map_size)
-    {
-      gdb_assert (i == map_size - 1);
-      map[j++] = map[i];
-    }
-
-  /* The map should not have shrunk to less than half the original size.  */
-  gdb_assert (map_size / 2 <= j);
-
-  return j;
-}
-
-/* Filter out overlapping sections, issuing a warning if any are found.
-   Overlapping sections could really be overlay sections which we didn't
-   classify as such in insert_section_p, or we could be dealing with a
-   corrupt binary.  */
-
-static int
-filter_overlapping_sections (struct obj_section **map, int map_size)
-{
-  int i, j;
-
-  for (i = 0, j = 0; i < map_size - 1; )
-    {
-      int k;
-
-      map[j++] = map[i];
-      for (k = i + 1; k < map_size; k++)
-	{
-	  struct obj_section *const sect1 = map[i];
-	  struct obj_section *const sect2 = map[k];
-	  const CORE_ADDR sect1_addr = sect1->addr ();
-	  const CORE_ADDR sect2_addr = sect2->addr ();
-	  const CORE_ADDR sect1_endaddr = sect1->endaddr ();
-
-	  gdb_assert (sect1_addr <= sect2_addr);
-
-	  if (sect1_endaddr <= sect2_addr)
-	    break;
-	  else
-	    {
-	      /* We have an overlap.  Report it.  */
-
-	      struct objfile *const objf1 = sect1->objfile;
-	      struct objfile *const objf2 = sect2->objfile;
-
-	      const struct bfd_section *const bfds1 = sect1->the_bfd_section;
-	      const struct bfd_section *const bfds2 = sect2->the_bfd_section;
-
-	      const CORE_ADDR sect2_endaddr = sect2->endaddr ();
-
-	      struct gdbarch *const gdbarch = objf1->arch ();
-
-	      complaint (_("unexpected overlap between:\n"
-			   " (A) section `%s' from `%s' [%s, %s)\n"
-			   " (B) section `%s' from `%s' [%s, %s).\n"
-			   "Will ignore section B"),
-			 bfd_section_name (bfds1), objfile_name (objf1),
-			 paddress (gdbarch, sect1_addr),
-			 paddress (gdbarch, sect1_endaddr),
-			 bfd_section_name (bfds2), objfile_name (objf2),
-			 paddress (gdbarch, sect2_addr),
-			 paddress (gdbarch, sect2_endaddr));
-	    }
-	}
-      i = k;
-    }
-
-  if (i < map_size)
-    {
-      gdb_assert (i == map_size - 1);
-      map[j++] = map[i];
-    }
-
-  return j;
-}
-
-
 /* Update PMAP, PMAP_SIZE with sections from all objfiles, excluding any
    TLS, overlay and overlapping sections.  */
 
 static void
-update_section_map (struct program_space *pspace,
-		    struct obj_section ***pmap, int *pmap_size)
+update_section_map (program_space *pspace)
 {
-  struct objfile_pspace_info *pspace_info;
-  int alloc_size, map_size, i;
-  struct obj_section *s, **map;
+  objfile_pspace_info *pspace_info = get_objfile_pspace_data (pspace);
 
-  pspace_info = get_objfile_pspace_data (pspace);
   gdb_assert (pspace_info->section_map_dirty != 0
-	      || pspace_info->new_objfiles_available != 0);
+	      || !pspace_info->sections_to_add.empty ()
+	      || !pspace_info->sections_to_remove.empty ());
 
-  map = *pmap;
-  xfree (map);
-
-  alloc_size = 0;
-  for (objfile *objfile : pspace->objfiles ())
-    ALL_OBJFILE_OSECTIONS (objfile, s)
-      if (insert_section_p (objfile->obfd, s->the_bfd_section))
-	alloc_size += 1;
-
-  /* This happens on detach/attach (e.g. in gdb.base/attach.exp).  */
-  if (alloc_size == 0)
+  if (pspace_info->section_map_dirty)
     {
-      *pmap = NULL;
-      *pmap_size = 0;
-      return;
+      pspace_info->sections_to_remove.clear ();
+      pspace_info->sections_to_add.clear ();
+      pspace_info->sections.clear ();
+      pspace_info->section_map_dirty = 0;
+      obj_section *s;
+      for (objfile *objfile : pspace->objfiles ())
+	ALL_OBJFILE_OSECTIONS (objfile, s)
+	  if (insert_section_p (objfile->obfd, s->the_bfd_section))
+	    pspace_info->sections.emplace (s);
     }
-
-  map = XNEWVEC (struct obj_section *, alloc_size);
-
-  i = 0;
-  for (objfile *objfile : pspace->objfiles ())
-    ALL_OBJFILE_OSECTIONS (objfile, s)
-      if (insert_section_p (objfile->obfd, s->the_bfd_section))
-	map[i++] = s;
-
-  std::sort (map, map + alloc_size, sort_cmp);
-  map_size = filter_debuginfo_sections(map, alloc_size);
-  map_size = filter_overlapping_sections(map, map_size);
-
-  if (map_size < alloc_size)
-    /* Some sections were eliminated.  Trim excess space.  */
-    map = XRESIZEVEC (struct obj_section *, map, map_size);
   else
-    gdb_assert (alloc_size == map_size);
+    {
+      while (!pspace_info->sections_to_remove.empty ())
+	{
+	  section_map_entry *entry = &pspace_info->sections_to_remove.front ();
+	  pspace_info->sections_to_remove.pop_front ();
+	  auto it = interval_tree<section_map_entry>::iterator::from_interval (
+	      pspace_info->sections, entry);
+	  if (it->section != nullptr)
+	    it->section->section_map_entry = nullptr;
+	  pspace_info->sections.erase (it);
+	}
 
-  *pmap = map;
-  *pmap_size = map_size;
-}
-
-/* Bsearch comparison function.  */
-
-static int
-bsearch_cmp (const void *key, const void *elt)
-{
-  const CORE_ADDR pc = *(CORE_ADDR *) key;
-  const struct obj_section *section = *(const struct obj_section **) elt;
-
-  if (pc < section->addr ())
-    return -1;
-  if (pc < section->endaddr ())
-    return 0;
-  return 1;
+      for (; !pspace_info->sections_to_add.empty ();
+	   pspace_info->sections_to_add.pop_front ())
+	{
+	  obj_section *s = &pspace_info->sections_to_add.front ();
+	  if (insert_section_p (s->objfile->obfd, s->the_bfd_section))
+	    pspace_info->sections.emplace (s);
+	}
+    }
 }
 
 /* Returns a section whose range includes PC or NULL if none found.   */
@@ -1194,7 +1132,7 @@ struct obj_section *
 find_pc_section (CORE_ADDR pc)
 {
   struct objfile_pspace_info *pspace_info;
-  struct obj_section *s, **sp;
+  obj_section *s;
 
   /* Check for mapped overlay section first.  */
   s = find_pc_mapped_section (pc);
@@ -1203,37 +1141,54 @@ find_pc_section (CORE_ADDR pc)
 
   pspace_info = get_objfile_pspace_data (current_program_space);
   if (pspace_info->section_map_dirty
-      || (pspace_info->new_objfiles_available
+      || !pspace_info->sections_to_remove.empty ()
+      || (!pspace_info->sections_to_add.empty ()
 	  && !pspace_info->inhibit_updates))
-    {
-      update_section_map (current_program_space,
-			  &pspace_info->sections,
-			  &pspace_info->num_sections);
+    update_section_map (current_program_space);
 
-      /* Don't need updates to section map until objfiles are added,
-	 removed or relocated.  */
-      pspace_info->new_objfiles_available = 0;
-      pspace_info->section_map_dirty = 0;
+  for (auto it = pspace_info->sections.find (pc, pc);
+       it != pspace_info->sections.end (); ++it)
+    {
+      if (s == nullptr)
+	{
+	  s = it->section;
+	  continue;
+	}
+      /* We have detected overlapping sections.  */
+      if (s->addr () == it->section->addr ()
+	  && (s->objfile->separate_debug_objfile == it->section->objfile
+	      || it->section->objfile->separate_debug_objfile == s->objfile))
+	{
+	  /* One section came from the real objfile, and the other from a
+	     separate debuginfo file.  */
+	  s = preferred_obj_section (s, it->section);
+	}
+      else
+	{
+	  /* Overlapping sections could really be overlay sections which we
+	     didn't classify as such in insert_section_p, or we could be
+	     dealing with a corrupt binary.  Report it.  */
+	  gdbarch *const gdbarch = s->objfile->arch ();
+
+	  complaint (_ ("unexpected overlap between:\n"
+			" (A) section `%s' from `%s' [%s, %s)\n"
+			" (B) section `%s' from `%s' [%s, %s).\n"
+			"Will ignore section B"),
+		     bfd_section_name (s->the_bfd_section),
+		     objfile_name (s->objfile), paddress (gdbarch, s->addr ()),
+		     paddress (gdbarch, s->endaddr ()),
+		     bfd_section_name (it->section->the_bfd_section),
+		     objfile_name (it->section->objfile),
+		     paddress (gdbarch, it->section->addr ()),
+		     paddress (gdbarch, it->section->endaddr ()));
+
+	  if (sort_cmp (it->section, s))
+	    s = it->section;
+	}
     }
 
-  /* The C standard (ISO/IEC 9899:TC2) requires the BASE argument to
-     bsearch be non-NULL.  */
-  if (pspace_info->sections == NULL)
-    {
-      gdb_assert (pspace_info->num_sections == 0);
-      return NULL;
-    }
-
-  sp = (struct obj_section **) bsearch (&pc,
-					pspace_info->sections,
-					pspace_info->num_sections,
-					sizeof (*pspace_info->sections),
-					bsearch_cmp);
-  if (sp != NULL)
-    return *sp;
-  return NULL;
+  return s;
 }
-
 
 /* Return non-zero if PC is in a section called NAME.  */
 
