@@ -100,6 +100,9 @@ namespace eval GenPerfTest {
     # The number of compunits in each objfile.
     set DEFAULT_NR_COMPUNITS 1
 
+    # Link the binary with the generated shared libraries by default
+    set DEFAULT_BINARY_LINK_WITH_SHLIBS 1
+
     # The number of public globals in each compunit.
     set DEFAULT_NR_EXTERN_GLOBALS 1
 
@@ -254,6 +257,7 @@ namespace eval GenPerfTest {
 	set testcase(tail_shlib_headers) $GenPerfTest::DEFAULT_TAIL_SHLIB_HEADERS
 	set testcase(nr_gen_shlibs) $GenPerfTest::DEFAULT_NR_GEN_SHLIBS
 	set testcase(nr_compunits) $GenPerfTest::DEFAULT_NR_COMPUNITS
+	set testcase(binary_link_with_shlibs) $GenPerfTest::DEFAULT_BINARY_LINK_WITH_SHLIBS
 
 	set testcase(nr_extern_globals) $GenPerfTest::DEFAULT_NR_EXTERN_GLOBALS
 	set testcase(nr_static_globals) $GenPerfTest::DEFAULT_NR_STATIC_GLOBALS
@@ -281,7 +285,7 @@ namespace eval GenPerfTest {
 	    binary_extra_sources binary_extra_headers
 	    gen_shlib_extra_sources gen_shlib_extra_headers
 	    tail_shlib_sources tail_shlib_headers
-	    nr_gen_shlibs nr_compunits
+	    nr_gen_shlibs nr_compunits binary_link_with_shlibs
 	    nr_extern_globals nr_static_globals
 	    nr_extern_functions nr_static_functions
 	    class_specs
@@ -1298,14 +1302,16 @@ namespace eval GenPerfTest {
 
     proc _make_shlib_options { self_var static run_nr } {
 	upvar 1 $self_var self
-	set nr_gen_shlibs [_get_param $self(nr_gen_shlibs) $run_nr]
 	set result ""
-	for { set i 0 } { $i < $nr_gen_shlibs } { incr i } {
-	    lappend result "shlib=[_make_shlib_name self $static $run_nr $i]"
-	}
-	set tail_shlib_name [_make_tail_shlib_name self $static $run_nr]
-	if { "$tail_shlib_name" != "" } {
-	    lappend result "shlib=$tail_shlib_name"
+	if { [_get_param $self(binary_link_with_shlibs) $run_nr] } {
+	    set nr_gen_shlibs [_get_param $self(nr_gen_shlibs) $run_nr]
+	    for { set i 0 } { $i < $nr_gen_shlibs } { incr i } {
+	        lappend result "shlib=[_make_shlib_name self $static $run_nr $i]"
+	    }
+	    set tail_shlib_name [_make_tail_shlib_name self $static $run_nr]
+	    if { "$tail_shlib_name" != "" } {
+	        lappend result "shlib=$tail_shlib_name"
+	    }
 	}
 	return $result
     }
