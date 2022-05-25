@@ -24,8 +24,8 @@
 #include <sys/mman.h>
 
 #include JIT_READER_H  /* Please see jit-reader.exp for an explanation.  */
+#include "jit-protocol-util.h"
 #include "jit-reader-host.h"
-#include "jit-protocol.h"
 
 struct jit_code_entry only_entry;
 
@@ -85,11 +85,7 @@ main (int argc, char **argv)
   only_entry.symfile_addr = symfile;
   only_entry.symfile_size = sizeof (struct jithost_abi);
 
-  __jit_debug_descriptor.first_entry = &only_entry;
-  __jit_debug_descriptor.relevant_entry = &only_entry;
-  __jit_debug_descriptor.action_flag = JIT_REGISTER;
-  __jit_debug_descriptor.version = 1;
-  __jit_debug_register_code ();
+  jit_push_back (&only_entry);
 
   function_stack_mangle ();
   function_add (5, 6);
