@@ -29,8 +29,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "jit-protocol.h"
 #include "jit-elf-util.h"
+#include "jit-protocol-util.h"
 
 static void
 usage (void)
@@ -77,17 +77,7 @@ main (int argc, char *argv[])
       struct jit_code_entry *const entry = calloc (1, sizeof (*entry));
       entry->symfile_addr = (const char *)addr;
       entry->symfile_size = obj_size;
-      entry->prev_entry = __jit_debug_descriptor.relevant_entry;
-      __jit_debug_descriptor.relevant_entry = entry;
-
-      if (entry->prev_entry != NULL)
-	entry->prev_entry->next_entry = entry;
-      else
-	__jit_debug_descriptor.first_entry = entry;
-
-      /* Notify GDB.  */
-      __jit_debug_descriptor.action_flag = JIT_REGISTER;
-      __jit_debug_register_code ();
+      jit_push_back (entry);
 
       if (jit_function () != 42)
 	{
@@ -103,27 +93,8 @@ main (int argc, char *argv[])
   i = 0;  /* break after fork */
 
   /* Now unregister them all in reverse order.  */
-  while (__jit_debug_descriptor.relevant_entry != NULL)
-    {
-      struct jit_code_entry *const entry =
-	__jit_debug_descriptor.relevant_entry;
-      struct jit_code_entry *const prev_entry = entry->prev_entry;
-
-      if (prev_entry != NULL)
-	{
-	  prev_entry->next_entry = NULL;
-	  entry->prev_entry = NULL;
-	}
-      else
-	__jit_debug_descriptor.first_entry = NULL;
-
-      /* Notify GDB.  */
-      __jit_debug_descriptor.action_flag = JIT_UNREGISTER;
-      __jit_debug_register_code ();
-
-      __jit_debug_descriptor.relevant_entry = prev_entry;
-      free (entry);
-    }
+  while (!jit_empty ())
+    free (jit_pop_back ());
 
   return 0;  /* break before return  */
 }
