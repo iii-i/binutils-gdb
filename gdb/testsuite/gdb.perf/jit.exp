@@ -1,0 +1,37 @@
+# Copyright (C) 2022 Free Software Foundation, Inc.
+
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+# Benchmark registering and unregistering JITed code (build part).
+
+load_lib perftest.exp
+load_lib gen-perf-test.exp
+
+if [skip_perf_tests] {
+    return 0
+}
+
+proc make_testcase_config { } {
+    set program_name "jit"
+    array set testcase [GenPerfTest::init_testcase $program_name]
+    set testcase(language) c
+    set testcase(binary_extra_sources) { { jit.c } }
+    set testcase(binary_link_with_shlibs) { 0 }
+    set testcase(gen_shlib_extra_sources) { { jit-solib.c } }
+    set testcase(run_names) { 500-sos }
+    set testcase(nr_gen_shlibs) { 500 }
+    return [array get testcase]
+}
+
+GenPerfTest::standard_compile_driver jit.exp make_testcase_config
