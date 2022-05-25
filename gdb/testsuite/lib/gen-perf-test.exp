@@ -1321,7 +1321,8 @@ namespace eval GenPerfTest {
 	set input_files [_make_binary_input_file_names self $static $run_nr]
 	set extra_headers [_get_param $self(binary_extra_headers) $run_nr]
 	set binary_file [_make_binary_name self $run_nr]
-	set compile_options [_compile_options self]
+	set nr_gen_shlibs [_get_param $self(nr_gen_shlibs) $run_nr]
+	set compile_options "[_compile_options self] additional_flags=-DSHLIB=$nr_gen_shlibs"
 	set shlib_options [_make_shlib_options self $static $run_nr]
 	if { [llength $shlib_options] > 0 } {
 	    append compile_options " " $shlib_options
