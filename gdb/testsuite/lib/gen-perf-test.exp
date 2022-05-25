@@ -76,6 +76,9 @@ namespace eval GenPerfTest {
     # Header files used by generated files and extra sources.
     set DEFAULT_BINARY_EXTRA_HEADERS {}
 
+    # The name of the function that adjusts binary's compile options.
+    set DEFAULT_BINARY_ADJUST_COMPILE_OPTIONS GenPerfTest::default_adjust_compile_options
+
     # Extra source files for each generated shlib.
     # The compiler passes -DSHLIB=NNN which the source can use, for example,
     # to define unique symbols for each shlib.
@@ -83,6 +86,10 @@ namespace eval GenPerfTest {
 
     # Header files used by generated files and extra sources.
     set DEFAULT_GEN_SHLIB_EXTRA_HEADERS {}
+
+    # The name of the function that adjusts each generated shlib's compile
+    # options.
+    set DEFAULT_GEN_SHLIB_ADJUST_COMPILE_OPTIONS GenPerfTest::default_adjust_compile_options
 
     # Source files for a tail shlib, or empty if none.
     # This library is loaded after all other shlibs (except any system shlibs
@@ -93,6 +100,9 @@ namespace eval GenPerfTest {
 
     # Header files for the tail shlib.
     set DEFAULT_TAIL_SHLIB_HEADERS {}
+
+    # The name of the function that adjusts tail shlib's compile options.
+    set DEFAULT_TAIL_SHLIB_ADJUST_COMPILE_OPTIONS GenPerfTest::default_adjust_compile_options
 
     # The number of shared libraries to create.
     set DEFAULT_NR_GEN_SHLIBS 0
@@ -184,6 +194,12 @@ namespace eval GenPerfTest {
     set source_suffixes(c) "c"
     set source_suffixes(c++) "cc"
 
+    # Do not adjust any compile options by default.
+
+    proc default_adjust_compile_options { options args } {
+	return options
+    }
+
     # Generate .worker files that control building all the "pieces" of the
     # testcase.  This doesn't include "main" or any test-specific stuff.
     # This mostly consists of the "bulk" (aka "crap" :-)) of the testcase to
@@ -251,10 +267,13 @@ namespace eval GenPerfTest {
 	set testcase(run_names) [list $name]
 	set testcase(binary_extra_sources) $GenPerfTest::DEFAULT_BINARY_EXTRA_SOURCES
 	set testcase(binary_extra_headers) $GenPerfTest::DEFAULT_BINARY_EXTRA_HEADERS
+	set testcase(binary_adjust_compile_options) $GenPerfTest::DEFAULT_BINARY_ADJUST_COMPILE_OPTIONS
 	set testcase(gen_shlib_extra_sources) $GenPerfTest::DEFAULT_GEN_SHLIB_EXTRA_SOURCES
 	set testcase(gen_shlib_extra_headers) $GenPerfTest::DEFAULT_GEN_SHLIB_EXTRA_HEADERS
+	set testcase(gen_shlib_adjust_compile_options) $GenPerfTest::DEFAULT_GEN_SHLIB_ADJUST_COMPILE_OPTIONS
 	set testcase(tail_shlib_sources) $GenPerfTest::DEFAULT_TAIL_SHLIB_SOURCES
 	set testcase(tail_shlib_headers) $GenPerfTest::DEFAULT_TAIL_SHLIB_HEADERS
+	set testcase(tail_shlib_adjust_compile_options) $GenPerfTest::DEFAULT_TAIL_SHLIB_ADJUST_COMPILE_OPTIONS
 	set testcase(nr_gen_shlibs) $GenPerfTest::DEFAULT_NR_GEN_SHLIBS
 	set testcase(nr_compunits) $GenPerfTest::DEFAULT_NR_COMPUNITS
 	set testcase(binary_link_with_shlibs) $GenPerfTest::DEFAULT_BINARY_LINK_WITH_SHLIBS
@@ -282,9 +301,9 @@ namespace eval GenPerfTest {
     proc _verify_parameter_lengths { self_var } {
 	upvar 1 $self_var self
 	set params {
-	    binary_extra_sources binary_extra_headers
-	    gen_shlib_extra_sources gen_shlib_extra_headers
-	    tail_shlib_sources tail_shlib_headers
+	    binary_extra_sources binary_extra_headers binary_adjust_compile_options
+	    gen_shlib_extra_sources gen_shlib_extra_headers gen_shlib_adjust_compile_options
+	    tail_shlib_sources tail_shlib_headers tail_shlib_adjust_compile_options
 	    nr_gen_shlibs nr_compunits binary_link_with_shlibs
 	    nr_extern_globals nr_static_globals
 	    nr_extern_functions nr_static_functions
@@ -1174,6 +1193,8 @@ namespace eval GenPerfTest {
 	set extra_headers [_get_param $self(gen_shlib_extra_headers) $run_nr]
 	set shlib_file [_make_shlib_name self $static $run_nr $so_nr]
 	set compile_options "[_compile_options self] additional_flags=-DSHLIB=$so_nr"
+	set adjust_compile_options [_get_param $self(gen_shlib_adjust_compile_options) $run_nr]
+	set compile_options [$adjust_compile_options $compile_options [expr $so_nr + 1]]
 	set all_header_files $header_files
 	append all_header_files $extra_headers
 	set compile_result [_perftest_compile self $source_files $all_header_files $shlib_file shlib $compile_options]
@@ -1218,6 +1239,8 @@ namespace eval GenPerfTest {
 	set header_files [_get_param $self(tail_shlib_headers) $run_nr]
 	set shlib_file [_make_tail_shlib_name self $static $run_nr]
 	set compile_options [_compile_options self]
+	set adjust_compile_options [_get_param $self(tail_shlib_adjust_compile_options) $run_nr]
+	set compile_options [$adjust_compile_options $compile_options]
 	set compile_result [_perftest_compile self $source_files $header_files $shlib_file shlib $compile_options]
 	if { $compile_result != "" } {
 	    verbose -log "_compile_tail_shlib failed: $compile_result"
@@ -1322,6 +1345,9 @@ namespace eval GenPerfTest {
 	set extra_headers [_get_param $self(binary_extra_headers) $run_nr]
 	set binary_file [_make_binary_name self $run_nr]
 	set compile_options [_compile_options self]
+	set adjust_compile_options [_get_param $self(binary_adjust_compile_options) $run_nr]
+	set nr_gen_shlibs [_get_param $self(nr_gen_shlibs) $run_nr]
+	set compile_options [$adjust_compile_options $compile_options $nr_gen_shlibs]
 	set shlib_options [_make_shlib_options self $static $run_nr]
 	if { [llength $shlib_options] > 0 } {
 	    append compile_options " " $shlib_options
