@@ -1,0 +1,79 @@
+# Copyright (C) 2022 Free Software Foundation, Inc.
+
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+# Benchmark registering and unregistering JITed code (build part).
+#
+# Usage example:
+#
+#     make build-perf RUNTESTFLAGS='jit.exp SOLIB_COUNT=100'
+#
+# Supported options:
+#
+# - SOLIB_COUNT: How many shared objects to build (default: 500).
+
+load_lib jit-elf-helpers.exp
+load_lib perftest.exp
+load_lib gen-perf-test.exp
+
+if [skip_perf_tests] {
+    return 0
+}
+
+if ![info exists SOLIB_COUNT] {
+    set SOLIB_COUNT 500
+}
+
+# Adjust binary compile options.
+proc jit_binary_adjust_compile_options { options nr_gen_shlibs } {
+    # Specify shared library load addresses.
+    global jit_compile_options
+    set options [concat $options $jit_compile_options]
+
+    # Specify the total number of shared libraries.
+    lappend options additional_flags=-DTOTAL_NR_SHLIBS=$nr_gen_shlibs
+
+    return $options
+}
+
+# Adjust solib compile options.
+proc jit_solib_adjust_compile_options { options so_nr } {
+    # Disable debuginfo (see compile_and_download_n_jit_so for explanations).
+    set debug [lsearch -exact $options debug]
+    if {$debug != -1} {
+	set options [lreplace $options $debug $debug]
+    }
+
+    # Specify a load address for this solib.
+    lappend options text_segment=[format 0x%x [n_jit_so_address $so_nr]]
+
+    return $options
+}
+
+proc make_testcase_config { } {
+    set program_name "jit"
+    array set testcase [GenPerfTest::init_testcase $program_name]
+    set testcase(language) c
+    set testcase(binary_extra_sources) { { jit.c } }
+    set testcase(binary_link_with_shlibs) { false }
+    set testcase(binary_adjust_compile_options) { jit_binary_adjust_compile_options }
+    set testcase(gen_shlib_extra_sources) { { jit-solib.c } }
+    set testcase(gen_shlib_adjust_compile_options) { jit_solib_adjust_compile_options }
+    set name "${::SOLIB_COUNT}-sos"
+    set testcase(run_names) [list $name]
+    set testcase(nr_gen_shlibs) ${::SOLIB_COUNT}
+    return [array get testcase]
+}
+
+GenPerfTest::standard_compile_driver jit.exp make_testcase_config
