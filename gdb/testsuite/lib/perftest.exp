@@ -159,7 +159,7 @@ proc tcl_string_list_to_python_list { l } {
     foreach elm $l {
 	lappend quoted_list [quote $elm]
     }
-    return "([join $quoted_list {, }])"
+    return "\[[join $quoted_list {, }]\]"
 }
 
 # Helper routine for PerfTest::assemble "run" step implementations.
