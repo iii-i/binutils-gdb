@@ -39,6 +39,7 @@
 #include "jit.h"
 #include "quick-symbol.h"
 #include <forward_list>
+#include "gdbsupport/intrusive_list.h"
 
 struct htab;
 struct objfile_data;
@@ -828,13 +829,19 @@ struct obj_section
   }
 
   /* BFD section pointer */
-  struct bfd_section *the_bfd_section;
+  struct bfd_section *the_bfd_section = nullptr;
 
   /* Objfile this section is part of.  */
-  struct objfile *objfile;
+  struct objfile *objfile = nullptr;
 
   /* True if this "overlay section" is mapped into an "overlay region".  */
-  int ovly_mapped;
+  int ovly_mapped = 0;
+
+  /* The corresponding section map entry, if any.  */
+  struct section_map_entry *section_map_entry = nullptr;
+
+  /* Sections that need to be added to the section map.  */
+  intrusive_list_node<obj_section> sections_to_add;
 };
 
 /* Declarations for functions defined in objfiles.c */
@@ -846,6 +853,8 @@ extern CORE_ADDR entry_point_address (void);
 extern void build_objfile_section_table (struct objfile *);
 
 extern void free_objfile_separate_debug (struct objfile *);
+
+extern void objfile_destroy_sections (objfile *objfile);
 
 extern void objfile_relocate (struct objfile *, const section_offsets &);
 extern void objfile_rebase (struct objfile *, CORE_ADDR);
