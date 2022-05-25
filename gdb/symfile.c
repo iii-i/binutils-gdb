@@ -1087,6 +1087,9 @@ symbol_file_add_with_addrs (bfd *abfd, const char *name,
     }
   syms_from_objfile (objfile, addrs, add_flags);
 
+  /* syms_from_objfile initialized section offsets, build section map.  */
+  objfile_build_section_map (objfile);
+
   /* We now have at least a partial symbol table.  Check to see if the
      user requested that all symbols be read on initial access via either
      the gdb startup command line or on a per symbol file basis.  Expand
@@ -2523,8 +2526,7 @@ reread_symbols (int from_tty)
 	    error (_("Can't read symbols from %s: %s."), objfile_name (objfile),
 		   bfd_errmsg (bfd_get_error ()));
 
-	  /* NB: after this call to obstack_free, objfiles_changed
-	     will need to be called (see discussion below).  */
+	  objfile_clear_section_map (objfile);
 	  obstack_free (&objfile->objfile_obstack, 0);
 	  objfile->sections = NULL;
 	  objfile->section_offsets.clear ();
@@ -2571,24 +2573,11 @@ reread_symbols (int from_tty)
 
 	  objfile->flags &= ~OBJF_PSYMTABS_READ;
 
-	  /* We are about to read new symbols and potentially also
-	     DWARF information.  Some targets may want to pass addresses
-	     read from DWARF DIE's through an adjustment function before
-	     saving them, like MIPS, which may call into
-	     "find_pc_section".  When called, that function will make
-	     use of per-objfile program space data.
-
-	     Since we discarded our section information above, we have
-	     dangling pointers in the per-objfile program space data
-	     structure.  Force GDB to update the section mapping
-	     information by letting it know the objfile has changed,
-	     making the dangling pointers point to correct data
-	     again.  */
-
-	  objfiles_changed ();
-
 	  /* Recompute section offsets and section indices.  */
 	  objfile->sf->sym_offsets (objfile, {});
+
+	  /* sym_offsets initialized section offsets, build section map.  */
+	  objfile_build_section_map (objfile);
 
 	  read_symbols (objfile, 0);
 

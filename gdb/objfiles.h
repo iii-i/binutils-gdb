@@ -835,6 +835,9 @@ struct obj_section
 
   /* True if this "overlay section" is mapped into an "overlay region".  */
   int ovly_mapped;
+
+  /* The corresponding section map entry, if any.  */
+  struct section_map_entry *section_map_entry;
 };
 
 /* Declarations for functions defined in objfiles.c */
@@ -846,6 +849,9 @@ extern CORE_ADDR entry_point_address (void);
 extern void build_objfile_section_table (struct objfile *);
 
 extern void free_objfile_separate_debug (struct objfile *);
+
+extern void objfile_build_section_map (objfile *objfile);
+extern void objfile_clear_section_map (objfile *objfile);
 
 extern void objfile_relocate (struct objfile *, const section_offsets &);
 extern void objfile_rebase (struct objfile *, CORE_ADDR);
@@ -860,8 +866,6 @@ extern int have_full_symbols (void);
 
 extern void objfile_set_sym_fns (struct objfile *objfile,
 				 const struct sym_fns *sf);
-
-extern void objfiles_changed (void);
 
 /* Return true if ADDR maps into one of the sections of OBJFILE and false
    otherwise.  */
@@ -903,17 +907,6 @@ in_plt_section (CORE_ADDR pc)
 /* Keep a registry of per-objfile data-pointers required by other GDB
    modules.  */
 DECLARE_REGISTRY(objfile);
-
-/* In normal use, the section map will be rebuilt by find_pc_section
-   if objfiles have been added, removed or relocated since it was last
-   called.  Calling inhibit_section_map_updates will inhibit this
-   behavior until the returned scoped_restore object is destroyed.  If
-   you call inhibit_section_map_updates you must ensure that every
-   call to find_pc_section in the inhibited region relates to a
-   section that is already in the section map and has not since been
-   removed or relocated.  */
-extern scoped_restore_tmpl<int> inhibit_section_map_updates
-    (struct program_space *pspace);
 
 extern void default_iterate_over_objfiles_in_search_order
   (gdbarch *gdbarch, iterate_over_objfiles_in_search_order_cb_ftype cb,
