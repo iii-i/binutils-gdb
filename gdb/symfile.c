@@ -2525,8 +2525,8 @@ reread_symbols (int from_tty)
 
 	  /* NB: after this call to obstack_free, objfiles_changed
 	     will need to be called (see discussion below).  */
+	  objfile_destroy_sections (objfile);
 	  obstack_free (&objfile->objfile_obstack, 0);
-	  objfile->sections = NULL;
 	  objfile->section_offsets.clear ();
 	  objfile->sect_index_bss = -1;
 	  objfile->sect_index_data = -1;
