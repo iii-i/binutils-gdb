@@ -39,15 +39,6 @@ usage (void)
   exit (1);
 }
 
-/* Must be defined by .exp file when compiling to know
-   what address to map the ELF binary to.  */
-#ifndef LOAD_ADDRESS
-#error "Must define LOAD_ADDRESS"
-#endif
-#ifndef LOAD_INCREMENT
-#error "Must define LOAD_INCREMENT"
-#endif
-
 int
 main (int argc, char *argv[])
 {
@@ -65,7 +56,7 @@ main (int argc, char *argv[])
   for (i = 1; i < argc; ++i)
     {
       size_t obj_size;
-      void *load_addr = (void *) (size_t) (LOAD_ADDRESS + (i - 1) * LOAD_INCREMENT);
+      void *load_addr = n_jit_so_address (i);
       printf ("Loading %s as JIT at %p\n", argv[i], load_addr);
       void *addr = load_elf (argv[i], &obj_size, load_addr);
 

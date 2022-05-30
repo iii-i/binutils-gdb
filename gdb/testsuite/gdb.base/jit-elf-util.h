@@ -117,3 +117,20 @@ load_elf (const char *libname, size_t *size, void *load_addr)
 
   return addr;
 }
+
+/* Must be defined by .exp file when compiling to know
+   what address to map the ELF binary to.  */
+#ifndef LOAD_ADDRESS
+#error "Must define LOAD_ADDRESS"
+#endif
+#ifndef LOAD_INCREMENT
+#error "Must define LOAD_INCREMENT"
+#endif
+
+/* Return the address of the SO_NRth shared library.  The first shared
+   library's SO_NR is 1.  */
+static void *
+n_jit_so_address (int so_nr)
+{
+  return (void *) (size_t) (LOAD_ADDRESS + (so_nr - 1) * LOAD_INCREMENT);
+}
