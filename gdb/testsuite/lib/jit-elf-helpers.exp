@@ -72,13 +72,18 @@ proc compile_jit_elf_main_as_so {main_solib_srcfile main_solib_binfile options} 
     return 0
 }
 
+# Return the address of the SO_NRth shared library.
+proc n_jit_so_address {so_nr} {
+    global jit_load_address jit_load_increment
+    return [expr $jit_load_address + $jit_load_increment * [expr $so_nr - 1]]
+}
+
 # Compile jit-elf-solib.c as a shared library in multiple copies and
 # upload them to the target.
 #
 # On success, return a list of target path to the shared libraries.
 # On failure, return -1.
 proc compile_and_download_n_jit_so {jit_solib_basename jit_solib_srcfile count} {
-    global jit_load_address jit_load_increment
     set binfiles_target {}
 
     for {set i 1} {$i <= $count} {incr i} {
@@ -88,7 +93,7 @@ proc compile_and_download_n_jit_so {jit_solib_basename jit_solib_srcfile count} 
 	# do symbol renaming by munging on ELF symbol table, and that
 	# wouldn't work for .debug sections.  Also, output for "info
 	# function" changes when debug info is present.
-	set addr [format 0x%x [expr $jit_load_address + $jit_load_increment * [expr $i-1]]]
+	set addr [format 0x%x [n_jit_so_address $i]]
 
 	# Use "text_segment=..." to ask the linker to relocate everything in the
 	# compiled shared library against a fixed base address.  Combined
