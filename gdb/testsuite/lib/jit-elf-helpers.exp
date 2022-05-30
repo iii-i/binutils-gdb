@@ -19,6 +19,9 @@
 
 set jit_load_address   0x7000000
 set jit_load_increment 0x1000000
+set jit_compile_options [list \
+    additional_flags=-DLOAD_ADDRESS=${jit_load_address}ull \
+    additional_flags=-DLOAD_INCREMENT=${jit_load_increment}ull]
 
 # Compile jit-elf-main.c as an executable.
 #
@@ -32,8 +35,7 @@ proc compile_jit_main {main_srcfile main_binfile options} {
 
     set options [concat \
 	$options \
-	additional_flags=-DLOAD_ADDRESS=$jit_load_address \
-	additional_flags=-DLOAD_INCREMENT=$jit_load_increment \
+	$jit_compile_options \
 	debug]
 
     if { [gdb_compile ${main_srcfile} ${main_binfile} \
@@ -57,8 +59,7 @@ proc compile_jit_elf_main_as_so {main_solib_srcfile main_solib_binfile options} 
 
     set options [concat \
 	$options \
-	additional_flags=-DLOAD_ADDRESS=$jit_load_address \
-	additional_flags=-DLOAD_INCREMENT=$jit_load_increment \
+	$jit_compile_options
 	debug]
 
     if { [gdb_compile_shlib ${main_solib_srcfile} ${main_solib_binfile} \
