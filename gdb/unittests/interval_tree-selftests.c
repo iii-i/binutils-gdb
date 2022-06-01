@@ -23,6 +23,12 @@
 #include <set>
 #include <sstream>
 
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+#include <assert.h>
+#undef gdb_assert
+#define gdb_assert assert
+#endif
+
 #include "gdbsupport/interval_tree.h"
 
 /* A test type for storing in an interval tree.  Interval tree must be able to
@@ -259,5 +265,136 @@ void _initialize_interval_tree_selftests ();
 void
 _initialize_interval_tree_selftests ()
 {
+#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
   selftests::register_test ("interval_tree", test_interval_tree);
+#endif
+}
+
+/* Fuzzing harness.  */
+
+class FuzzerInput
+{
+public:
+  FuzzerInput (const unsigned char *data, size_t size)
+      : m_data (data), m_size (size)
+  {
+  }
+
+  bool
+  end () const
+  {
+    return m_size == 0;
+  }
+
+  template <typename T>
+  T
+  get ()
+  {
+    T result = 0;
+    for (size_t i = 0; i < sizeof (T); i++)
+      result |= read_byte () << (i * 8);
+    return result;
+  }
+
+private:
+  unsigned char
+  read_byte ()
+  {
+    if (end ())
+      return 0;
+    m_data++;
+    m_size--;
+    return m_data[-1];
+  }
+
+  const unsigned char *m_data;
+  size_t m_size;
+};
+
+extern "C" int LLVMFuzzerTestOneInput (const unsigned char *, size_t);
+extern "C" int
+LLVMFuzzerTestOneInput (const unsigned char *data, size_t size)
+{
+  FuzzerInput input (data, size);
+  interval_tree<test_interval> t;
+  std::vector<std::pair<decltype (t)::iterator, size_t> > t_iterators;
+  std::multiset<test_interval, cmp_test_interval> exp;
+  std::vector<decltype (exp)::iterator> exp_iterators;
+  size_t add_counter = 0;
+
+  static const char *debug_str = getenv ("DEBUG");
+  static int debug = debug_str == nullptr ? 0 : atoi (debug_str);
+
+  while (!input.end ())
+    {
+      switch (input.get<char> () % 3)
+	{
+	case 0:
+	  {
+	    /* Add.  */
+	    int low = input.get<int> (), high = input.get<int> ();
+	    if (low > high)
+	      std::swap (low, high);
+	    if (debug)
+	      std::cout << "auto it" << add_counter << " = check_emplace (t, "
+			<< low << ", " << high << ");" << std::endl;
+	    t_iterators.push_back (
+		std::make_pair (t.emplace (low, high), add_counter));
+	    if (debug)
+	      std::cout << "/*\n" << t << "*/" << std::endl;
+	    else
+	      std::ostringstream () << t;
+	    exp_iterators.push_back (exp.emplace (low, high));
+	    add_counter += 1;
+	    break;
+	  }
+	case 1:
+	  {
+	    /* Find.  */
+	    int low = input.get<int> (), high = input.get<int> ();
+	    if (low > high)
+	      std::swap (low, high);
+	    if (debug)
+	      std::cout << "check_iterator (t.find (" << low << ", " << high
+			<< "), t.end ()" << std::flush;
+	    auto it = t.find (low, high);
+	    for (const test_interval &exp_interval : exp)
+	      {
+		if (high < exp_interval.low || low > exp_interval.high)
+		  continue;
+		if (debug)
+		  std::cout << ", " << exp_interval.low << ", "
+			    << exp_interval.high << std::flush;
+		gdb_assert (it->low == exp_interval.low
+			    && it->high == exp_interval.high);
+		++it;
+	      }
+	    if (debug)
+	      std::cout << ");" << std::endl;
+	    gdb_assert (it == t.end ());
+	    break;
+	  }
+	case 2:
+	  {
+	    /* Remove.  */
+	    if (!t_iterators.empty ())
+	      {
+		int index = input.get<int> () % t_iterators.size ();
+		if (debug)
+		  std::cout << "check_erase (t, it"
+			    << t_iterators[index].second << ");" << std::endl;
+		t.erase (t_iterators[index].first);
+		t_iterators.erase (t_iterators.begin () + index);
+		exp.erase (exp_iterators[index]);
+		exp_iterators.erase (exp_iterators.begin () + index);
+                if (debug)
+                  std::cout << "/*\n" << t << "*/" << std::endl;
+                else
+                  std::ostringstream () << t;
+	      }
+	    break;
+	  }
+	}
+    }
+  return 0;
 }
