@@ -32,7 +32,7 @@ if [skip_perf_tests] {
 }
 
 if ![info exists SOLIB_COUNT] {
-    set SOLIB_COUNT 500
+    set SOLIB_COUNT 2500
 }
 
 # Adjust binary compile options.
